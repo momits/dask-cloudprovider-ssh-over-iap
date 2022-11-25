@@ -4,6 +4,8 @@ import uuid
 import json
 
 import sqlite3
+from pathlib import Path
+from typing import AsyncIterator
 
 import dask
 from dask.utils import tmpfile
@@ -201,9 +203,7 @@ class GCPInstance(VMInterface):
         return config
 
     async def create_vm(self):
-
         self.cloud_init = self.cluster.render_process_cloud_init(self)
-
         self.gcp_config = self.create_gcp_config()
 
         try:
@@ -290,10 +290,65 @@ class GCPScheduler(SchedulerMixin, GCPInstance):
     def __init__(self, *args, **kwargs):
         kwargs.pop("preemptible", None)  # scheduler instances are not preemptible
         super().__init__(*args, **kwargs)
+        self.ssh_socket_path = "~/.ssh/dask-cloudprovider-gcp-socket"
 
     async def start(self):
         await self.start_scheduler()
         self.status = Status.running
+
+    async def close_ssh_tunnel(self):
+        if Path(self.ssh_socket_path).exists():
+            self.cluster._log(f"Closing SSH-Tunnel...")
+            program = "gcloud"
+            args = ("compute",
+                    "ssh",
+                    "--tunnel-through-iap",
+                    self.name,
+                    "--",
+                    "-S",
+                    self.ssh_socket_path,
+                    "-O",
+                    "exit")
+            proc = await asyncio.create_subprocess_exec(program, *args)
+            await proc.wait()
+            self.cluster._log(f"SSH tunnel closed.")
+
+    async def close(self):
+        await super().close()
+        await self.close_ssh_tunnel()
+
+    async def wait_for_ssh_tunnel(self, max_num_retries: int = 10):
+        program = "gcloud"
+        args = ("compute",
+                "ssh",
+                "--tunnel-through-iap",
+                self.name,
+                "--",
+                "-f",
+                "-N",
+                "-M",
+                "-S",
+                self.ssh_socket_path,
+                "-L",
+                f"{self.port}:localhost:{self.port}",
+                "-L",
+                "8787:localhost:8787")
+
+        self.cluster._log(f"Waiting 20s for instance to become available via ssh...")
+        await asyncio.sleep(20.)
+
+        for _ in range(max_num_retries):
+            self.cluster._log(f"Running {program} with args {args}.")
+            proc = await asyncio.create_subprocess_exec(program,
+                                                        *args)
+            await proc.wait()
+            if proc.returncode == 0:
+                self.cluster._log(f"Created ssh tunnel!")
+                break
+            else:
+                self.cluster._log(f"Encountered error when starting gcloud ssh tunnel (exit code {proc.returncode}). "
+                                  f"Retrying in 10s...")
+                await asyncio.sleep(10.)
 
     async def start_scheduler(self):
         self.cluster._log(
@@ -309,16 +364,8 @@ class GCPScheduler(SchedulerMixin, GCPInstance):
         self.cluster._log("Creating scheduler instance")
         self.internal_ip, self.external_ip = await self.create_vm()
 
-        if self.config.get("public_ingress", True) and not is_inside_gce():
-            # scheduler must be publicly available, and firewall
-            # needs to be in place to allow access to 8786 on
-            # the external IP
-            self.address = f"{self.cluster.protocol}://{self.external_ip}:{self.port}"
-        else:
-            # if the client is running inside GCE environment
-            # it's better to use internal IP, which doesn't
-            # require firewall setup
-            self.address = f"{self.cluster.protocol}://{self.internal_ip}:{self.port}"
+        await self.wait_for_ssh_tunnel()
+        self.address = f"{self.cluster.protocol}://localhost:{self.port}"
         await self.wait_for_scheduler()
 
         # need to reserve internal IP for workers
