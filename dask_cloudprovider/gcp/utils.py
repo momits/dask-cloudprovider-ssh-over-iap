@@ -1,17 +1,20 @@
+from functools import partial
+
 import httplib2
 import googleapiclient.http
 import google_auth_httplib2
 
 
+def _build_request_inner(http, *args,  credentials=None, **kwargs):
+    new_http = httplib2.Http()
+    if credentials is not None:
+        new_http = google_auth_httplib2.AuthorizedHttp(credentials, http=new_http)
+
+    return googleapiclient.http.HttpRequest(new_http, *args, **kwargs)
+
+
 def build_request(credentials=None):
-    def inner(http, *args, **kwargs):
-        new_http = httplib2.Http()
-        if credentials is not None:
-            new_http = google_auth_httplib2.AuthorizedHttp(credentials, http=new_http)
-
-        return googleapiclient.http.HttpRequest(new_http, *args, **kwargs)
-
-    return inner
+    return partial(_build_request_inner, credentials=credentials)
 
 
 def is_inside_gce() -> bool:
