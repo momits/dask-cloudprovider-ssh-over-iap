@@ -69,6 +69,7 @@ class GCPInstance(VMInterface):
         auto_shutdown=None,
         preemptible=False,
         instance_labels=None,
+        service_account_email=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -105,6 +106,8 @@ class GCPInstance(VMInterface):
         _instance_labels = self.config.get("instance_labels")
         _instance_labels.update(instance_labels)
         self.instance_labels = _instance_labels
+
+        self.service_account_email = service_account_email or self.config.get("service_account_email")
 
         self.general_zone = "-".join(self.zone.split("-")[:2])  # us-east1-c -> us-east1
 
@@ -145,7 +148,7 @@ class GCPInstance(VMInterface):
             # Allow the instance to access cloud storage and logging.
             "serviceAccounts": [
                 {
-                    "email": "default",
+                    "email": self.service_account_email,
                     "scopes": [
                         "https://www.googleapis.com/auth/devstorage.read_write",
                         "https://www.googleapis.com/auth/logging.write",
@@ -424,11 +427,7 @@ class GCPWorker(GCPInstance):
     async def start_worker(self):
         self.cluster._log("Creating worker instance")
         self.internal_ip, self.external_ip = await self.create_vm()
-        if self.config.get("public_ingress", True):
-            # scheduler is publicly available
-            self.address = self.external_ip
-        else:
-            self.address = self.internal_ip
+        self.address = self.internal_ip
 
 
 class GCPCluster(VMCluster):
@@ -628,6 +627,7 @@ class GCPCluster(VMCluster):
         preemptible=None,
         debug=False,
         instance_labels=None,
+        service_account_email=None,
         **kwargs,
     ):
 
@@ -671,6 +671,7 @@ class GCPCluster(VMCluster):
             if preemptible is not None
             else self.config.get("preemptible"),
             "instance_labels": instance_labels or self.config.get("instance_labels"),
+            "service_account_email": service_account_email or self.config.get("service_account_email")
         }
         self.scheduler_options = {**self.options}
         self.worker_options = {**self.options}
