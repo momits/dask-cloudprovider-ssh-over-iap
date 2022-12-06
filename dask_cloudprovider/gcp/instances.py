@@ -70,6 +70,7 @@ class GCPInstance(VMInterface):
         preemptible=False,
         instance_labels=None,
         service_account_email=None,
+        service_account_extra_scopes=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -108,6 +109,10 @@ class GCPInstance(VMInterface):
         self.instance_labels = _instance_labels
 
         self.service_account_email = service_account_email or self.config.get("service_account_email")
+        self.service_account_extra_scopes = (service_account_extra_scopes or
+                                             self.config.get("service_account_extra_scopes"))
+        if self.service_account_extra_scopes is None:
+            self.service_account_extra_scopes = []
 
         self.general_zone = "-".join(self.zone.split("-")[:2])  # us-east1-c -> us-east1
 
@@ -153,7 +158,7 @@ class GCPInstance(VMInterface):
                         "https://www.googleapis.com/auth/devstorage.read_write",
                         "https://www.googleapis.com/auth/logging.write",
                         "https://www.googleapis.com/auth/monitoring.write",
-                    ],
+                    ] + self.service_account_extra_scopes,
                 }
             ],
             # Metadata is readable from the instance and allows you to
@@ -628,6 +633,7 @@ class GCPCluster(VMCluster):
         debug=False,
         instance_labels=None,
         service_account_email=None,
+        service_account_extra_scopes=None,
         **kwargs,
     ):
 
@@ -671,7 +677,9 @@ class GCPCluster(VMCluster):
             if preemptible is not None
             else self.config.get("preemptible"),
             "instance_labels": instance_labels or self.config.get("instance_labels"),
-            "service_account_email": service_account_email or self.config.get("service_account_email")
+            "service_account_email": service_account_email or self.config.get("service_account_email"),
+            "service_account_extra_scopes": (service_account_extra_scopes or
+                                             self.config.get("service_account_extra_scopes"))
         }
         self.scheduler_options = {**self.options}
         self.worker_options = {**self.options}
